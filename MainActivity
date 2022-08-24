@@ -1,60 +1,118 @@
 package com.example.qrcode
 
-import android.graphics.ImageFormat
+import android.content.pm.PackageManager
+import android.os.Bundle
+import android.util.Size
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
-import androidx.camera.core.ImageProxy
-import com.google.zxing.*
-import com.google.zxing.common.HybridBinarizer
-import java.nio.ByteBuffer
+import androidx.camera.core.ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST
+import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.camera.view.PreviewView
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.Text
+import androidx.compose.material.TextField
+import androidx.compose.runtime.*
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import com.example.qrcode.ui.theme.QrcodeTheme
 
-class QrCodeAnalizer(
-    private val onQrCodeScanned: (String) -> Unit
-) : ImageAnalysis.Analyzer {
+class MainActivity : ComponentActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContent {
+            QrcodeTheme {
+                var code by remember {
+                    mutableStateOf("")
+                }
+                val context = LocalContext.current
+                val lifecycleOwner = LocalLifecycleOwner.current
+                val cameraProviderFuture = remember {
+                    ProcessCameraProvider.getInstance(context)
+                }
 
-    private val supportedImageFormats = listOf(
-        ImageFormat.YUV_420_888,
-        ImageFormat.YUV_422_888,
-        ImageFormat.YUV_444_888
-    )
-
-    override fun analyze(image: ImageProxy) {
-        if (image.format in supportedImageFormats) {
-            val bytes = image.planes.first().buffer.toByteArray()
-           // image.imageInfo.rotationDegrees
-            val source = PlanarYUVLuminanceSource(
-                bytes,
-                image.width,
-                image.width,
-                0,
-                0,
-                image.width,
-                image.height,
-                false
-            )
-            val binaryBmp = BinaryBitmap(HybridBinarizer(source))
-            try {
-                val result = MultiFormatReader().apply {
-                    setHints(
-                        mapOf(
-                            DecodeHintType.POSSIBLE_FORMATS to arrayListOf(
-                                BarcodeFormat.QR_CODE
-                            )
+                var hasCamPermission by remember {
+                    mutableStateOf(
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            android.Manifest.permission.CAMERA
                         )
+                                == PackageManager.PERMISSION_GRANTED
                     )
-                }.decode(binaryBmp)
-                onQrCodeScanned(result.text)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            } finally {
-                image.close()
-            }
-        }
-    }
+                }
 
-    private fun ByteBuffer.toByteArray(): ByteArray {
-        rewind()
-        return ByteArray(remaining()).also {
-            get(it)
+                val laucher =
+                    rememberLauncherForActivityResult(contract = ActivityResultContracts.RequestPermission(),
+                        onResult = { granted ->
+                            hasCamPermission = granted
+                        })
+                LaunchedEffect(key1 = true) {
+                    laucher.launch(android.Manifest.permission.CAMERA)
+                }
+
+                Column(modifier = Modifier.fillMaxSize()) {
+                    if (hasCamPermission) {
+                        AndroidView(
+                            factory = { context ->
+                                val previewView = PreviewView(context)
+                                val preview = androidx.camera.core.Preview.Builder().build()
+                                val selector = CameraSelector.Builder()
+                                    .requireLensFacing(CameraSelector.LENS_FACING_BACK)
+                                    .build()
+                                preview.setSurfaceProvider(previewView.surfaceProvider)
+                                val imageAnalysis = ImageAnalysis.Builder()
+                                    .setTargetResolution(
+                                        Size(
+                                            previewView.width,
+                                            previewView.height
+                                        )
+                                    )
+                                    .setBackpressureStrategy(STRATEGY_KEEP_ONLY_LATEST)
+                                    .build()
+                                imageAnalysis.setAnalyzer(
+                                    ContextCompat.getMainExecutor(context),
+                                    QrCodeAnalizer { result ->
+                                        code = result
+                                    })
+                                try {
+                                    cameraProviderFuture.get().bindToLifecycle(
+                                        lifecycleOwner,
+                                        selector,
+                                        preview
+
+
+                                    )
+                                } catch (e: Exception) {
+                                    e.printStackTrace()
+                                }
+                                previewView
+                            },
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = code,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(32.dp)
+                        )
+
+                    }
+                }
+            }
         }
     }
 }
